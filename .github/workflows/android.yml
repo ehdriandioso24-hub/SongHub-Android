@@ -23,16 +23,15 @@ jobs:
           java-version: '17'
 
       - name: Check required files
+        shell: bash
         run: |
+          set -euo pipefail
           test -f SongHub_Android_Project.zip
           test -f assets/songbook_icon.jpg
           test -f assets/Songbook_splash.png
 
       - name: Extract SongHub project
-        run: |
-          unzip -q SongHub_Android_Project.zip -d .
-          echo "Top-level files after extraction:"
-          find . -maxdepth 4 \( -name settings.gradle -o -name settings.gradle.kts -o -name build.gradle -o -name build.gradle.kts \) -print
+        run: unzip -q SongHub_Android_Project.zip -d .
 
       - name: Find Android project
         shell: bash
@@ -40,21 +39,22 @@ jobs:
           set -euo pipefail
           SETTINGS_FILE="$(find . -type f \( -name settings.gradle -o -name settings.gradle.kts \) -not -path './.git/*' -print -quit)"
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: No settings.gradle or settings.gradle.kts found after extracting the ZIP."
-            echo "Check that SongHub_Android_Project.zip contains the complete Android/Gradle project."
+            echo "ERROR: No settings.gradle or settings.gradle.kts found in the extracted ZIP."
             exit 1
           fi
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
           echo "ANDROID_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found Android project at: $PROJECT_DIR"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
           if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: No app/build.gradle or app/build.gradle.kts found under $PROJECT_DIR"
-            find "$PROJECT_DIR" -maxdepth 4 -type f \( -name build.gradle -o -name build.gradle.kts \) -print
+            echo "ERROR: app/build.gradle or app/build.gradle.kts is missing."
             exit 1
           fi
+          echo "Android project: $PROJECT_DIR"
 
       - name: Install Gradle 8.9
+        shell: bash
         run: |
+          set -euo pipefail
           curl -fsSL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle-8.9-bin.zip
           unzip -q /tmp/gradle-8.9-bin.zip -d /tmp
           echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
@@ -83,38 +83,31 @@ jobs:
           </resources>
           EOF
 
-          # Add AndroidX SplashScreen dependency once.
-          if [ -f "$GRADLE" ]; then
-            if ! grep -q "androidx.core:core-splashscreen" "$GRADLE"; then
-              python3 - <<'PY'
+          # Add the AndroidX SplashScreen dependency safely, including one-line Gradle files.
+          python3 - <<'PY'
           from pathlib import Path
-          p = Path(__import__("os").environ["ANDROID_PROJECT_DIR"]) / "app/build.gradle"
-          s = p.read_text()
-          if "dependencies {" not in s:
-              raise SystemExit("Could not find dependencies { } in app/build.gradle")
-          s = s.replace("dependencies {", "dependencies {\n    implementation 'androidx.core:core-splashscreen:1.0.1'", 1)
-          p.write_text(s)
+          import os, re
+          app = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app"
+          candidates = [app / "build.gradle", app / "build.gradle.kts"]
+          gradle = next((p for p in candidates if p.exists()), None)
+          if gradle is None:
+              raise SystemExit("No app/build.gradle or app/build.gradle.kts found.")
+          text = gradle.read_text()
+          if "androidx.core:core-splashscreen" not in text:
+              match = re.search(r"dependencies\s*\{", text)
+              if not match:
+                  raise SystemExit(f"Could not find dependencies {{ }} in {gradle}")
+              if gradle.name.endswith(".kts"):
+                  dep = '\n    implementation("androidx.core:core-splashscreen:1.0.1")\n'
+              else:
+                  dep = "\n    implementation 'androidx.core:core-splashscreen:1.0.1'\n"
+              text = text[:match.end()] + dep + text[match.end():]
+              gradle.write_text(text)
+          print(f"Configured splash dependency in {gradle}")
           PY
-            fi
-          elif [ -f "$KTS" ]; then
-            if ! grep -q "androidx.core:core-splashscreen" "$KTS"; then
-              python3 - <<'PY'
-          from pathlib import Path
-          import os
-          p = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app/build.gradle.kts"
-          s = p.read_text()
-          if "dependencies {" not in s:
-              raise SystemExit("Could not find dependencies { } in app/build.gradle.kts")
-          s = s.replace("dependencies {", 'dependencies {\n    implementation("androidx.core:core-splashscreen:1.0.1")', 1)
-          p.write_text(s)
-          PY
-            fi
-          fi
 
-          # Copy splash artwork. Android's native splash displays this as a centered icon.
           cp assets/Songbook_splash.png "$RES/drawable/songbook_splash.png"
 
-          # Convert the JPG logo to PNG for Android adaptive icon foreground.
           python3 - <<'PY'
           from PIL import Image
           from pathlib import Path
@@ -122,30 +115,6 @@ jobs:
           res = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app/src/main/res"
           with Image.open("assets/songbook_icon.jpg") as im:
               im.convert("RGBA").save(res / "drawable/songbook_icon_foreground.png", "PNG")
-          PY
-
-          cat > "$RES/drawable/songbook_icon_background.xml" <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"
-              android:shape="rectangle">
-              <solid android:color="#FFFFFF"/>
-          </shape>
-          EOF
-
-          cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@drawable/songbook_icon_background"/>
-              <foreground android:drawable="@drawable/songbook_icon_foreground"/>
-          </adaptive-icon>
-          EOF
-
-          # Generate legacy launcher icons at standard Android density sizes.
-          python3 - <<'PY'
-          from PIL import Image
-          from pathlib import Path
-          import os
-          res = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app/src/main/res"
           sizes = {
               "mipmap-mdpi": 48,
               "mipmap-hdpi": 72,
@@ -161,31 +130,43 @@ jobs:
                   )
           PY
 
-          # Apply app name, launcher icons, and splash theme to the existing manifest.
+          cat > "$RES/drawable/songbook_icon_background.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#FFFFFF"/>
+          </shape>
+          EOF
+
+          cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/songbook_icon_background"/>
+              <foreground android:drawable="@drawable/songbook_icon_foreground"/>
+          </adaptive-icon>
+          EOF
+
           python3 - <<'PY'
           from pathlib import Path
           import os, re
           p = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app/src/main/AndroidManifest.xml"
-          if not p.exists():
-              raise SystemExit(f"Manifest not found: {p}")
-          s = p.read_text()
-          match = re.search(r"<application\b[^>]*>", s, flags=re.S)
+          text = p.read_text()
+          match = re.search(r"<application\b[^>]*>", text, flags=re.S)
           if not match:
-              raise SystemExit("Could not find <application> tag in AndroidManifest.xml")
+              raise SystemExit("Could not find <application> in AndroidManifest.xml")
           tag = match.group(0)
-          def set_attr(tag, name, value):
+          attrs = {
+              "android:label": "@string/app_name",
+              "android:icon": "@mipmap/ic_launcher",
+              "android:roundIcon": "@mipmap/ic_launcher",
+              "android:theme": "@style/Theme.SongHub",
+          }
+          for name, value in attrs.items():
               pattern = rf'\s+{re.escape(name)}="[^"]*"'
               if re.search(pattern, tag):
-                  return re.sub(pattern, f'\n        {name}="{value}"', tag, count=1)
-              return tag[:-1] + f'\n        {name}="{value}">'
-          for name, value in (
-              ("android:label", "@string/app_name"),
-              ("android:icon", "@mipmap/ic_launcher"),
-              ("android:roundIcon", "@mipmap/ic_launcher"),
-              ("android:theme", "@style/Theme.SongHub"),
-          ):
-              tag = set_attr(tag, name, value)
-          p.write_text(s[:match.start()] + tag + s[match.end():])
+                  tag = re.sub(pattern, f'\n        {name}="{value}"', tag, count=1)
+              else:
+                  tag = tag[:-1] + f'\n        {name}="{value}">'
+          p.write_text(text[:match.start()] + tag + text[match.end():])
           PY
 
           cat > "$RES/values/themes.xml" <<'EOF'
