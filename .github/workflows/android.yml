@@ -21,45 +21,112 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
+      - name: Check required files
+        run: |
+          test -f SongHub_Android_Project.zip
+          test -f assets/songbook_icon.jpg
+          test -f assets/songbook_splash.png
+
       - name: Extract SongHub project
-        run: |
-          unzip -q SongHub_Android_Project.zip -d .
+        run: unzip -q SongHub_Android_Project.zip -d .
 
-      - name: Set app name
-        run: |
-          mkdir -p SongHub_Android_Project/app/src/main/res/values
+      - name: Install image conversion dependency
+        run: python3 -m pip install --user Pillow
 
-          cat > SongHub_Android_Project/app/src/main/res/values/strings.xml <<'EOF'
+      - name: Configure app name, splash theme, and icons
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="SongHub_Android_Project/app"
+          RES="$APP/src/main/res"
+          MANIFEST="$APP/src/main/AndroidManifest.xml"
+          GRADLE="$APP/build.gradle"
+          KTS="$APP/build.gradle.kts"
+
+          mkdir -p "$RES/values" "$RES/drawable" "$RES/mipmap-anydpi-v26" \
+            "$RES/mipmap-mdpi" "$RES/mipmap-hdpi" "$RES/mipmap-xhdpi" \
+            "$RES/mipmap-xxhdpi" "$RES/mipmap-xxxhdpi"
+
+          cat > "$RES/values/strings.xml" <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">Songbook for SongHub</string>
           </resources>
           EOF
 
-      - name: Install app icon and splash screen
-        run: |
-          RES="SongHub_Android_Project/app/src/main/res"
+          # Add AndroidX SplashScreen dependency without duplicating it.
+          if [ -f "$GRADLE" ]; then
+            if ! grep -q "androidx.core:core-splashscreen" "$GRADLE"; then
+              python3 - <<'PY'
+          from pathlib import Path
+          p = Path("SongHub_Android_Project/app/build.gradle")
+          s = p.read_text()
+          if "dependencies {" not in s:
+              raise SystemExit("Could not find dependencies { } in app/build.gradle")
+          s = s.replace(
+              "dependencies {",
+              "dependencies {\n    implementation 'androidx.core:core-splashscreen:1.0.1'",
+              1
+          )
+          p.write_text(s)
+          PY
+            fi
+          elif [ -f "$KTS" ]; then
+            if ! grep -q "androidx.core:core-splashscreen" "$KTS"; then
+              python3 - <<'PY'
+          from pathlib import Path
+          p = Path("SongHub_Android_Project/app/build.gradle.kts")
+          s = p.read_text()
+          if "dependencies {" not in s:
+              raise SystemExit("Could not find dependencies { } in app/build.gradle.kts")
+          s = s.replace(
+              "dependencies {",
+              'dependencies {\n    implementation("androidx.core:core-splashscreen:1.0.1")',
+              1
+          )
+          p.write_text(s)
+          PY
+            fi
+          else
+            echo "No app/build.gradle or app/build.gradle.kts found."
+            exit 1
+          fi
 
-          mkdir -p "$RES/drawable"
-          mkdir -p "$RES/mipmap-hdpi"
-          mkdir -p "$RES/mipmap-mdpi"
-          mkdir -p "$RES/mipmap-xhdpi"
-          mkdir -p "$RES/mipmap-xxhdpi"
-          mkdir -p "$RES/mipmap-xxxhdpi"
+          # Native Android splash screen theme. Keep the splash graphic as the
+          # centered splash icon; a full-screen branded screen requires a Compose UI.
+          cat > "$RES/values/themes.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.SongHub" parent="Theme.SplashScreen">
+                  <item name="windowSplashScreenBackground">#000000</item>
+                  <item name="windowSplashScreenAnimatedIcon">@drawable/songbook_splash</item>
+                  <item name="postSplashScreenTheme">@style/Theme.SongHub.Main</item>
+              </style>
 
-          # Image 1 - Songbook logo / app icon
-          cp assets/songbook_icon.jpg "$RES/drawable/songbook_icon.jpg"
+              <style name="Theme.SongHub.Main" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+          </resources>
+          EOF
 
-          # Image 2 - Loading / splash screen
-          cp assets/songbook_splash.png "$RES/drawable/songbook_splash.png"
+          # Convert the provided JPG logo to PNG for the adaptive icon foreground.
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          src = Path("assets/songbook_icon.jpg")
+          out = Path("SongHub_Android_Project/app/src/main/res/drawable/songbook_icon_foreground.png")
+          with Image.open(src) as im:
+              im.convert("RGBA").save(out, "PNG")
+          PY
 
-          # Create adaptive icon background
           cat > "$RES/drawable/songbook_icon_background.xml" <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -67,9 +134,6 @@ jobs:
               <solid android:color="#FFFFFF"/>
           </shape>
           EOF
-
-          # Create adaptive icon
-          mkdir -p "$RES/mipmap-anydpi-v26"
 
           cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -79,45 +143,52 @@ jobs:
           </adaptive-icon>
           EOF
 
-          # Copy logo as foreground
-          cp assets/songbook_icon.jpg "$RES/drawable/songbook_icon_foreground.jpg"
+          # Legacy launcher icons in each density folder.
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          src = Path("assets/songbook_icon.jpg")
+          sizes = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192,
+          }
+          with Image.open(src) as im:
+              im = im.convert("RGBA")
+              for folder, size in sizes.items():
+                  out = Path("SongHub_Android_Project/app/src/main/res") / folder / "ic_launcher.png"
+                  im.resize((size, size), Image.Resampling.LANCZOS).save(out, "PNG")
+          PY
 
-          # Legacy launcher icon
-          cp assets/songbook_icon.jpg "$RES/mipmap-mdpi/ic_launcher.jpg"
-          cp assets/songbook_icon.jpg "$RES/mipmap-hdpi/ic_launcher.jpg"
-          cp assets/songbook_icon.jpg "$RES/mipmap-xhdpi/ic_launcher.jpg"
-          cp assets/songbook_icon.jpg "$RES/mipmap-xxhdpi/ic_launcher.jpg"
-          cp assets/songbook_icon.jpg "$RES/mipmap-xxxhdpi/ic_launcher.jpg"
-
-      - name: Configure Android Manifest
-        run: |
-          MANIFEST="SongHub_Android_Project/app/src/main/AndroidManifest.xml"
-
+          # Ensure the manifest uses the app name, launcher icon, and splash theme.
           python3 - <<'PY'
           from pathlib import Path
-
-          path = Path("SongHub_Android_Project/app/src/main/AndroidManifest.xml")
-
-          if path.exists():
-              text = path.read_text()
-
-              text = text.replace(
-                  'android:label="@string/app_name"',
-                  'android:label="@string/app_name"'
-              )
-
-              if 'android:icon=' not in text:
-                  text = text.replace(
-                      '<application',
-                      '<application android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"'
-                  )
-
-              path.write_text(text)
+          import re
+          p = Path("SongHub_Android_Project/app/src/main/AndroidManifest.xml")
+          if not p.exists():
+              raise SystemExit(f"Manifest not found: {p}")
+          s = p.read_text()
+          match = re.search(r"<application\b[^>]*>", s, flags=re.S)
+          if not match:
+              raise SystemExit("Could not find the <application> tag in AndroidManifest.xml")
+          tag = match.group(0)
+          def set_attr(tag, name, value):
+              pattern = rf'\s+{re.escape(name)}="[^"]*"'
+              if re.search(pattern, tag):
+                  return re.sub(pattern, f'\n        {name}="{value}"', tag, count=1)
+              return tag[:-1] + f'\n        {name}="{value}">'
+          tag = set_attr(tag, "android:label", "@string/app_name")
+          tag = set_attr(tag, "android:icon", "@mipmap/ic_launcher")
+          tag = set_attr(tag, "android:roundIcon", "@mipmap/ic_launcher")
+          tag = set_attr(tag, "android:theme", "@style/Theme.SongHub")
+          s = s[:match.start()] + tag + s[match.end():]
+          p.write_text(s)
           PY
 
       - name: Build debug APK
-        run: |
-          gradle -p SongHub_Android_Project assembleDebug
+        run: gradle -p SongHub_Android_Project assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -125,3 +196,4 @@ jobs:
           name: Songbook-for-SongHub-APK
           path: SongHub_Android_Project/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
