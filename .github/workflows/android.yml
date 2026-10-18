@@ -153,7 +153,7 @@ jobs:
               "mipmap-xxhdpi": 144,
               "mipmap-xxxhdpi": 192,
           }
-          with Image.open("assets/songbook_icon.jpg") as source:
+          with Image.open("assets/Songbook_icon.jpg") as source:
               image = source.convert("RGBA")
               for folder, size in sizes.items():
                   image.resize((size, size), Image.Resampling.LANCZOS).save(
