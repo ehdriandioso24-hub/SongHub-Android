@@ -112,7 +112,7 @@ jobs:
           fi
 
           # Copy splash artwork. Android's native splash displays this as a centered icon.
-          cp assets/songbook_splash.png "$RES/drawable/songbook_splash.png"
+          cp assets/Songbook_splash.png "$RES/drawable/songbook_splash.png"
 
           # Convert the JPG logo to PNG for Android adaptive icon foreground.
           python3 - <<'PY'
