@@ -29,6 +29,28 @@ jobs:
       - name: Extract SongHub project
         run: unzip -q SongHub_Android_Project.zip -d .
 
+      # 1. Pagpapalit ng App Name patungong "Songbook for SongHub"
+      - name: Update App Name
+        run: |
+          STRINGS_FILE="SongHub_Android_Project/app/src/main/res/values/strings.xml"
+          if [ -f "$STRINGS_FILE" ]; then
+            sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">Songbook for SongHub<\/string>/g' "$STRINGS_FILE"
+          else
+            echo "Creating strings.xml as it does not exist..."
+            mkdir -p "$(dirname "$STRINGS_FILE")"
+            echo '<resources><string name="app_name">Songbook for SongHub</string></resources>' > "$STRINGS_FILE"
+          fi
+
+      # 2. Paglalagay ng App Icon at Loading/Splash Screen (Optional/Automation step)
+      # Maaari mong ilagay dito ang script kung saan kokopyahin mo ang mga larawan mula sa iyong repository 
+      # patungo sa tamang res/drawable o res/mipmap folders ng Android project bago i-compile.
+      - name: Copy Custom Assets (Icon & Splash)
+        run: |
+          # Halimbawa kung mayroon kang folder na 'assets' sa root ng repository mo:
+          # cp -R assets/icon/* SongHub_Android_Project/app/src/main/res/
+          # cp assets/splash.png SongHub_Android_Project/app/src/main/res/drawable/splash_screen.png
+          echo "Assets setup placeholder ready."
+
       - name: Build debug APK
         run: gradle -p SongHub_Android_Project assembleDebug
 
