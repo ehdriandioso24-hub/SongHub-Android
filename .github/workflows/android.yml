@@ -1,12 +1,10 @@
-name: Build SongHub Android APK
+name: Build SongHub EHDZ Android APK
 
 on:
   workflow_dispatch:
   push:
     paths:
       - 'SongHub_Android_Project_EHDZ.zip'
-      - 'SongHub_Cyberpunk_Search_AZ_Title_Artist_Number_Updated.zip'
-      - 'SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip'
       - '.github/workflows/android.yml'
 
 permissions:
@@ -26,25 +24,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Find SongHub project ZIP
+      - name: Find project ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -f SongHub_Android_Project_EHDZ.zip ]; then
-            echo "PROJECT_ZIP=SongHub_Android_Project_EHDZ.zip" >> "$GITHUB_ENV"
-          elif [ -f SongHub_Cyberpunk_Search_AZ_Title_Artist_Number_Updated.zip ]; then
-            echo "PROJECT_ZIP=SongHub_Cyberpunk_Search_AZ_Title_Artist_Number_Updated.zip" >> "$GITHUB_ENV"
-          elif [ -f SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip ]; then
-            echo "PROJECT_ZIP=SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip" >> "$GITHUB_ENV"
-          else
-            echo "::error::SongHub project ZIP not found in repository root."
+          if [ ! -f "SongHub_Android_Project_EHDZ.zip" ]; then
+            echo "::error::SongHub_Android_Project_EHDZ.zip not found in repository root."
             exit 1
           fi
 
-          echo "Selected project ZIP."
+          echo "PROJECT_ZIP=SongHub_Android_Project_EHDZ.zip" >> "$GITHUB_ENV"
 
-      - name: Extract SongHub project
+      - name: Extract Android project
         shell: bash
         run: |
           set -euo pipefail
@@ -52,49 +44,37 @@ jobs:
           mkdir -p extracted
           unzip -oq "$PROJECT_ZIP" -d extracted
 
-          SETTINGS_FILE="$(find extracted -type f \
-            \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -not -path '*/.gradle/*' \
-            -print -quit)"
+          PROJECT_DIR="extracted/SongHub_Android_Project"
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::settings.gradle was not found."
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
+            echo "::error::settings.gradle not found."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "::error::app/build.gradle not found."
+            exit 1
+          fi
 
-          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+          if [ ! -f "$PROJECT_DIR/app/src/main/assets/www/app.js" ]; then
+            echo "::error::SongHub app.js not found."
+            exit 1
+          fi
 
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "::error::App Gradle file was not found."
+          if [ ! -f "$PROJECT_DIR/app/src/main/assets/www/splash-screen.png" ]; then
+            echo "::error::Loading screen image not found."
             exit 1
           fi
 
           echo "ANDROID_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found Android project: $PROJECT_DIR"
+          echo "Android project files verified."
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Verify SongHub assets
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          WEB="$ANDROID_PROJECT_DIR/app/src/main/assets/www"
-
-          test -f "$WEB/index.html"
-          test -f "$WEB/app.js"
-          test -f "$WEB/songs-data.js"
-          test -f "$WEB/splash-screen.png"
-
-          echo "SongHub web assets verified."
-
-      - name: Build debug APK
+      - name: Build SongHub debug APK
         shell: bash
         run: |
           set -euo pipefail
@@ -108,11 +88,12 @@ jobs:
           APK="$ANDROID_PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "::error::APK was not generated."
+            echo "::error::APK build finished but app-debug.apk was not found."
             exit 1
           fi
 
-          echo "APK build completed."
+          ls -lh "$APK"
+          echo "SongHub APK built successfully."
 
       - name: Upload SongHub APK
         uses: actions/upload-artifact@v4
