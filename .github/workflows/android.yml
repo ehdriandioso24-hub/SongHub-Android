@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'SongHub_Cyberpunk_Search_AZ_Updated.zip'
+      - 'SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip'
       - 'assets/**'
       - '.github/workflows/android.yml'
 
@@ -26,62 +26,77 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f SongHub_Cyberpunk_Search_AZ_Updated.zip
+
+          test -f SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip
           test -f assets/songbook_icon.jpg
           test -f assets/Songbook_splash.png
 
-      - name: Extract SongHub project
+          echo "All required files found."
+
+      - name: Extract updated SongHub project
         shell: bash
         run: |
           set -euo pipefail
-          unzip -q SongHub_Cyberpunk_Search_AZ_Updated.zip -d .
+
+          unzip -q SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip -d .
+
+          echo "Updated SongHub project extracted."
 
       - name: Find Android project
         shell: bash
         run: |
           set -euo pipefail
-          SETTINGS_FILE="$(find . -type f \( -name settings.gradle -o -name settings.gradle.kts \) -not -path './.git/*' -print -quit)"
+
+          SETTINGS_FILE="$(find . -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -not -path './.git/*' \
+            -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: No settings.gradle or settings.gradle.kts found in the extracted ZIP."
+            echo "ERROR: No settings.gradle or settings.gradle.kts found."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+
           echo "ANDROID_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
           test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
             echo "ERROR: app/build.gradle or app/build.gradle.kts is missing."
             exit 1
           fi
 
-          echo "Android project: $PROJECT_DIR"
+          echo "Android project found at: $PROJECT_DIR"
 
       - name: Install Gradle 8.9
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle-8.9-bin.zip
+
+          curl -fsSL \
+            https://services.gradle.org/distributions/gradle-8.9-bin.zip \
+            -o /tmp/gradle-8.9-bin.zip
+
           unzip -q /tmp/gradle-8.9-bin.zip -d /tmp
+
           echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
 
-      - name: Install image conversion dependency
+      - name: Install Pillow
         run: python3 -m pip install --user Pillow
 
-      - name: Configure app name, splash theme, and icons
+      - name: Configure app name, splash and icons
         shell: bash
         run: |
           set -euo pipefail
 
           APP="$ANDROID_PROJECT_DIR/app"
           RES="$APP/src/main/res"
-          MANIFEST="$APP/src/main/AndroidManifest.xml"
-          GRADLE="$APP/build.gradle"
-          KTS="$APP/build.gradle.kts"
 
-          mkdir -p "$RES/values" \
+          mkdir -p \
+            "$RES/values" \
             "$RES/drawable" \
             "$RES/mipmap-anydpi-v26" \
             "$RES/mipmap-mdpi" \
@@ -96,45 +111,6 @@ jobs:
               <string name="app_name">Songbook for SongHub</string>
           </resources>
           EOF
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          app = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app"
-          candidates = [
-              app / "build.gradle",
-              app / "build.gradle.kts"
-          ]
-
-          gradle = next((p for p in candidates if p.exists()), None)
-
-          if gradle is None:
-              raise SystemExit(
-                  "No app/build.gradle or app/build.gradle.kts found."
-              )
-
-          text = gradle.read_text()
-
-          if "androidx.core:core-splashscreen" not in text:
-              match = re.search(r"dependencies\s*\{", text)
-
-              if not match:
-                  raise SystemExit(
-                      f"Could not find dependencies {{ }} in {gradle}"
-                  )
-
-              if gradle.name.endswith(".kts"):
-                  dep = '\n    implementation("androidx.core:core-splashscreen:1.0.1")\n'
-              else:
-                  dep = "\n    implementation 'androidx.core:core-splashscreen:1.0.1'\n"
-
-              text = text[:match.end()] + dep + text[match.end():]
-              gradle.write_text(text)
-
-          print(f"Configured splash dependency in {gradle}")
-          PY
 
           cp assets/Songbook_splash.png \
             "$RES/drawable/songbook_splash.png"
@@ -189,13 +165,120 @@ jobs:
           </adaptive-icon>
           EOF
 
+      - name: Configure splash screen dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+
           python3 - <<'PY'
           from pathlib import Path
           import os
           import re
 
-          p = Path(os.environ["ANDROID_PROJECT_DIR"]) / \
-              "app/src/main/AndroidManifest.xml"
+          app = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app"
+
+          candidates = [
+              app / "build.gradle",
+              app / "build.gradle.kts"
+          ]
+
+          gradle = next(
+              (p for p in candidates if p.exists()),
+              None
+          )
+
+          if gradle is None:
+              raise SystemExit(
+                  "No app/build.gradle or app/build.gradle.kts found."
+              )
+
+          text = gradle.read_text()
+
+          if "androidx.core:core-splashscreen" not in text:
+
+              match = re.search(
+                  r"dependencies\s*\{",
+                  text
+              )
+
+              if not match:
+                  raise SystemExit(
+                      f"Could not find dependencies block in {gradle}"
+                  )
+
+              if gradle.name.endswith(".kts"):
+                  dependency = (
+                      '\n    implementation'
+                      '("androidx.core:core-splashscreen:1.0.1")\n'
+                  )
+              else:
+                  dependency = (
+                      "\n    implementation "
+                      "'androidx.core:core-splashscreen:1.0.1'\n"
+                  )
+
+              text = (
+                  text[:match.end()] +
+                  dependency +
+                  text[match.end():]
+              )
+
+              gradle.write_text(text)
+
+          print("SplashScreen dependency configured.")
+          PY
+
+      - name: Configure Android theme
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RES="$ANDROID_PROJECT_DIR/app/src/main/res"
+
+          cat > "$RES/values/themes.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+
+              <style name="Theme.SongHub"
+                  parent="Theme.SplashScreen">
+
+                  <item name="windowSplashScreenBackground">#000000</item>
+
+                  <item name="windowSplashScreenAnimatedIcon">
+                      @drawable/songbook_splash
+                  </item>
+
+                  <item name="postSplashScreenTheme">
+                      @style/Theme.SongHub.Main
+                  </item>
+
+              </style>
+
+              <style name="Theme.SongHub.Main"
+                  parent="android:style/Theme.Material.Light.NoActionBar">
+
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">false</item>
+
+              </style>
+
+          </resources>
+          EOF
+
+      - name: Configure Android Manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          p = (
+              Path(os.environ["ANDROID_PROJECT_DIR"])
+              / "app/src/main/AndroidManifest.xml"
+          )
 
           text = p.read_text()
 
@@ -207,80 +290,86 @@ jobs:
 
           if not match:
               raise SystemExit(
-                  "Could not find <application> in AndroidManifest.xml"
+                  "Could not find <application>."
               )
 
           tag = match.group(0)
 
-          attrs = {
+          attributes = {
               "android:label": "@string/app_name",
               "android:icon": "@mipmap/ic_launcher",
               "android:roundIcon": "@mipmap/ic_launcher",
               "android:theme": "@style/Theme.SongHub",
           }
 
-          for name, value in attrs.items():
+          for name, value in attributes.items():
+
               pattern = rf'\s+{re.escape(name)}="[^"]*"'
 
               if re.search(pattern, tag):
+
                   tag = re.sub(
                       pattern,
                       f'\n        {name}="{value}"',
                       tag,
                       count=1
                   )
+
               else:
-                  tag = tag[:-1] + \
+
+                  tag = (
+                      tag[:-1] +
                       f'\n        {name}="{value}">'
+                  )
 
           p.write_text(
               text[:match.start()] +
               tag +
               text[match.end():]
           )
+
+          print("AndroidManifest configured.")
           PY
 
-          cat > "$RES/values/themes.xml" <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="Theme.SongHub" parent="Theme.SplashScreen">
-                  <item name="windowSplashScreenBackground">#000000</item>
-                  <item name="windowSplashScreenAnimatedIcon">@drawable/songbook_splash</item>
-                  <item name="postSplashScreenTheme">@style/Theme.SongHub.Main</item>
-              </style>
-
-              <style name="Theme.SongHub.Main"
-                  parent="android:style/Theme.Material.Light.NoActionBar">
-                  <item name="android:fontFamily">sans</item>
-                  <item name="android:windowLightStatusBar">false</item>
-              </style>
-          </resources>
-          EOF
-
-      - name: Verify A-Z search files
+      - name: Verify updated search project
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking extracted project for A-Z search..."
+          echo "Checking project files..."
 
-          if grep -RniE \
-            "alphabet|A-Z|A–Z|letter|search.*letter|filter.*letter" \
+          find "$ANDROID_PROJECT_DIR" \
+            -type f \
+            \( -name "*.html" \
+               -o -name "*.js" \
+               -o -name "*.css" \
+               -o -name "*.kt" \
+               -o -name "*.java" \) \
+            -print | head -100
+
+          echo ""
+          echo "Searching for Title / Artist / Number / A-Z functionality..."
+
+          grep -RniE \
+            "title|artist|song.?number|alphabet|A-Z|A–Z|letter" \
             "$ANDROID_PROJECT_DIR" \
             --exclude-dir=.gradle \
             --exclude-dir=build \
-            | head -50; then
-            echo "A-Z related code found."
-          else
-            echo "WARNING: Could not find obvious A-Z search code."
-          fi
+            | head -100 || true
 
       - name: Build debug APK
-        run: gradle -p "$ANDROID_PROJECT_DIR" assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle \
+            -p "$ANDROID_PROJECT_DIR" \
+            clean \
+            assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Songbook-for-SongHub-APK-AZ
+          name: Songbook-for-SongHub-APK-AZ-Title-Artist-Number
           path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
