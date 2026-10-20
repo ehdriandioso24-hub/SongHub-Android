@@ -30,7 +30,7 @@ jobs:
           set -euo pipefail
 
           if [ ! -f "SongHub_Android_Project_EHDZ.zip" ]; then
-            echo "::error::SongHub_Android_Project_EHDZ.zip not found in repository root."
+            echo "::error::SongHub_Android_Project_EHDZ.zip not found."
             exit 1
           fi
 
@@ -41,6 +41,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          rm -rf extracted
           mkdir -p extracted
 
           unzip -oq "$PROJECT_ZIP" -d extracted
@@ -62,62 +63,63 @@ jobs:
             exit 1
           fi
 
-          if [ ! -f "$PROJECT_DIR/app/src/main/assets/www/splash-screen.png" ]; then
-            echo "::error::Loading screen image not found."
-            exit 1
-          fi
-
           echo "ANDROID_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project files verified."
+          echo "Android project verified."
+          echo "Project directory: $PROJECT_DIR"
 
-      - name: Change app name to Songbook for SongHub
+      - name: Change Android app name
         shell: bash
         run: |
           set -euo pipefail
 
-          STRINGS_FILE="$ANDROID_PROJECT_DIR/app/src/main/res/values/strings.xml"
+          MANIFEST=$(find "$ANDROID_PROJECT_DIR/app/src/main" \
+            -type f \
+            -name "AndroidManifest.xml" \
+            -print -quit)
 
-          if [ ! -f "$STRINGS_FILE" ]; then
-            echo "::error::strings.xml not found."
+          if [ -z "$MANIFEST" ]; then
+            echo "::error::AndroidManifest.xml not found."
             exit 1
           fi
 
-          python3 - "$STRINGS_FILE" <<'PY'
-          import sys
+          echo "Manifest found:"
+          echo "$MANIFEST"
+
+          python3 - "$MANIFEST" <<'PY'
           import re
+          import sys
 
-          path = sys.argv[1]
+          manifest = sys.argv[1]
+          new_name = "Songbook for SongHub"
 
-          with open(path, "r", encoding="utf-8") as f:
+          with open(manifest, "r", encoding="utf-8") as f:
               text = f.read()
 
-          replacement = '<string name="app_name">Songbook for SongHub</string>'
+          # Change every existing android:label
+          text = re.sub(
+              r'android:label\s*=\s*("[^"]*"|\'[^\']*\')',
+              'android:label="Songbook for SongHub"',
+              text
+          )
 
-          pattern = r'<string\s+name=["\']app_name["\'][^>]*>.*?</string>'
-
-          if re.search(pattern, text, flags=re.DOTALL):
+          # If there was no android:label, add one to <application>
+          if 'android:label=' not in text:
               text = re.sub(
-                  pattern,
-                  replacement,
+                  r'<application\b',
+                  '<application android:label="Songbook for SongHub"',
                   text,
-                  count=1,
-                  flags=re.DOTALL
-              )
-          else:
-              text = text.replace(
-                  "</resources>",
-                  f"    {replacement}\n</resources>"
+                  count=1
               )
 
-          with open(path, "w", encoding="utf-8") as f:
+          with open(manifest, "w", encoding="utf-8") as f:
               f.write(text)
 
           print("App name changed to: Songbook for SongHub")
           PY
 
-          echo "Updated app name:"
-          grep -n "app_name" "$STRINGS_FILE" || true
+          echo "Updated manifest:"
+          grep -n "android:label" "$MANIFEST" || true
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -131,14 +133,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing."
-            exit 1
-          fi
+          KEYSTORE_DIR="$RUNNER_TEMP/songbook-keystore"
+          mkdir -p "$KEYSTORE_DIR"
 
-          KEYSTORE_FILE="$RUNNER_TEMP/songhub-keystore.jks"
+          KEYSTORE_FILE="$KEYSTORE_DIR/songhub-release.keystore"
 
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
 
           if [ ! -s "$KEYSTORE_FILE" ]; then
             echo "::error::Keystore file is empty."
@@ -147,12 +147,14 @@ jobs:
 
           echo "KEYSTORE_FILE=$KEYSTORE_FILE" >> "$GITHUB_ENV"
 
-          echo "Android keystore prepared."
+          echo "Android keystore prepared successfully."
 
-      - name: Build Songbook for SongHub Release APK
+      - name: Build Songbook Release APK
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "Building RELEASE APK..."
 
           gradle \
             -p "$ANDROID_PROJECT_DIR" \
@@ -163,12 +165,29 @@ jobs:
           RELEASE_DIR="$ANDROID_PROJECT_DIR/app/build/outputs/apk/release"
 
           if [ ! -d "$RELEASE_DIR" ]; then
-            echo "::error::Release output directory was not found."
+            echo "::error::Release APK directory not found."
             exit 1
           fi
 
-          echo "Release APK files:"
-          find "$RELEASE_DIR" -type f -name "*.apk" -print
+          echo "Release files:"
+          find "$RELEASE_DIR" -maxdepth 1 -type f -print
+
+          INPUT_APK=$(find "$RELEASE_DIR" \
+            -maxdepth 1 \
+            -type f \
+            -name "*.apk" \
+            -print \
+            | head -n 1)
+
+          if [ -z "$INPUT_APK" ]; then
+            echo "::error::No Release APK was produced."
+            exit 1
+          fi
+
+          echo "Release APK found:"
+          echo "$INPUT_APK"
+
+          echo "INPUT_APK=$INPUT_APK" >> "$GITHUB_ENV"
 
       - name: Sign Release APK
         shell: bash
@@ -179,38 +198,81 @@ jobs:
         run: |
           set -euo pipefail
 
-          RELEASE_DIR="$ANDROID_PROJECT_DIR/app/build/outputs/apk/release"
-
-          UNSIGNED_APK=$(find "$RELEASE_DIR" \
-            -type f \
-            -name "*-unsigned.apk" \
-            | head -n 1)
-
-          if [ -z "$UNSIGNED_APK" ]; then
-            echo "::error::Unsigned Release APK was not found."
-            echo "Available APK files:"
-            find "$RELEASE_DIR" -type f -name "*.apk" -print
-            exit 1
-          fi
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
           if [ -z "$SDK_ROOT" ]; then
-            echo "::error::Android SDK root was not found."
+            echo "::error::Android SDK location not found."
             exit 1
           fi
 
-          ZIPALIGN=$(find "$SDK_ROOT/build-tools" \
-            -type f \
-            -name "zipalign" \
+          BUILD_TOOLS_DIR=$(find "$SDK_ROOT/build-tools" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
             | sort -V \
             | tail -n 1)
 
-          APKSIGNER=$(find "$SDK_ROOT/build-tools" \
-            -type f \
-            -name "apksigner" \
-            | sort -V \
-            | tail -n 1)
+          if [ -z "$BUILD_TOOLS_DIR" ]; then
+            echo "::error::Android Build Tools not found."
+            exit 1
+          fi
 
-          if [ -z "$ZIPALIGN" ]; then
-            echo "::error::zipalign
+          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+
+          if [ ! -f "$ZIPALIGN" ]; then
+            echo "::error::zipalign not found."
+            exit 1
+          fi
+
+          if [ ! -f "$APKSIGNER" ]; then
+            echo "::error::apksigner not found."
+            exit 1
+          fi
+
+          RELEASE_DIR="$ANDROID_PROJECT_DIR/app/build/outputs/apk/release"
+
+          ALIGNED_APK="$RELEASE_DIR/songbook-aligned.apk"
+          FINAL_APK="$RELEASE_DIR/Songbook-for-SongHub-release.apk"
+
+          echo "Using Build Tools:"
+          echo "$BUILD_TOOLS_DIR"
+
+          echo "Zipaligning APK..."
+
+          "$ZIPALIGN" \
+            -f \
+            -p \
+            4 \
+            "$INPUT_APK" \
+            "$ALIGNED_APK"
+
+          echo "Signing APK..."
+
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE_FILE" \
+            --ks-key-alias "$KEYSTORE_ALIAS" \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
+            --key-pass "pass:$KEYSTORE_KEY_PASSWORD" \
+            --out "$FINAL_APK" \
+            "$ALIGNED_APK"
+
+          echo "Verifying APK signature..."
+
+          "$APKSIGNER" verify \
+            --verbose \
+            "$FINAL_APK"
+
+          echo "Signed APK created successfully."
+
+          ls -lh "$FINAL_APK"
+
+          echo "FINAL_APK=$FINAL_APK" >> "$GITHUB_ENV"
+
+      - name: Upload Songbook Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Songbook-for-SongHub-Release-APK
+          path: ${{ env.FINAL_APK }}
+          if-no-files-found: error
+          retention-days: 14
