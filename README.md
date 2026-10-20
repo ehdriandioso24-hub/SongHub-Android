@@ -4,7 +4,7 @@ Your complete digital songbook for karaoke and singing.
 
 ## 📱 Download Songbook
 
-### 👉 [📥 DOWNLOAD SONGBOOK APK](sha256:825092b7b86acc76fa78a5a3de1f379cca2c9494ab3a20e68485cefcd03508fb)
+### 👉 [📥 DOWNLOAD SONGBOOK APK](https://github.com/ehdriandioso24-hub/SongHub-Android/releases/latest)
 
 **Latest Version: 1.0.0**
 
