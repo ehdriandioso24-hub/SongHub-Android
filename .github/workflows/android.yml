@@ -1,12 +1,12 @@
-name: Build Songbook for SongHub Android APK
+name: Build SongHub Android APK
 
 on:
   workflow_dispatch:
   push:
     paths:
+      - 'SongHub_Android_Project_EHDZ.zip'
       - 'SongHub_Cyberpunk_Search_AZ_Title_Artist_Number_Updated.zip'
       - 'SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip'
-      - 'assets/**'
       - '.github/workflows/android.yml'
 
 permissions:
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout project
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Java 17
@@ -26,268 +26,73 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Check required files
+      - name: Find SongHub project ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -f SongHub_Cyberpunk_Search_AZ_Title_Artist_Number_Updated.zip ]; then
+          if [ -f SongHub_Android_Project_EHDZ.zip ]; then
+            echo "PROJECT_ZIP=SongHub_Android_Project_EHDZ.zip" >> "$GITHUB_ENV"
+          elif [ -f SongHub_Cyberpunk_Search_AZ_Title_Artist_Number_Updated.zip ]; then
             echo "PROJECT_ZIP=SongHub_Cyberpunk_Search_AZ_Title_Artist_Number_Updated.zip" >> "$GITHUB_ENV"
           elif [ -f SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip ]; then
             echo "PROJECT_ZIP=SongHub_Cyberpunk_Search_AZ_Title_Artist_Number.zip" >> "$GITHUB_ENV"
           else
-            echo "ERROR: SongHub project ZIP not found in repository root."
+            echo "::error::SongHub project ZIP not found in repository root."
             exit 1
           fi
 
-          test -f assets/songbook_icon.jpg
-          test -f assets/Songbook_splash.png
-
-          echo "Required files found."
+          echo "Selected project ZIP."
 
       - name: Extract SongHub project
         shell: bash
         run: |
           set -euo pipefail
-          unzip -oq "$PROJECT_ZIP" -d .
 
-          SETTINGS_FILE="$(find . -type f \
+          mkdir -p extracted
+          unzip -oq "$PROJECT_ZIP" -d extracted
+
+          SETTINGS_FILE="$(find extracted -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -not -path './.git/*' \
             -not -path '*/.gradle/*' \
             -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: No settings.gradle file found in extracted project."
+            echo "::error::settings.gradle was not found."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
 
-          echo "ANDROID_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
           test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
           if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
              [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: App Gradle file not found."
+            echo "::error::App Gradle file was not found."
             exit 1
           fi
 
-          echo "Android project: $PROJECT_DIR"
+          echo "ANDROID_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found Android project: $PROJECT_DIR"
 
-      - name: Install Gradle 8.9
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Verify SongHub assets
         shell: bash
         run: |
           set -euo pipefail
 
-          curl -fsSL \
-            https://services.gradle.org/distributions/gradle-8.9-bin.zip \
-            -o /tmp/gradle.zip
+          WEB="$ANDROID_PROJECT_DIR/app/src/main/assets/www"
 
-          unzip -oq /tmp/gradle.zip -d /tmp
-          echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
+          test -f "$WEB/index.html"
+          test -f "$WEB/app.js"
+          test -f "$WEB/songs-data.js"
+          test -f "$WEB/splash-screen.png"
 
-      - name: Install Pillow
-        run: python3 -m pip install --user Pillow
-
-      - name: Configure app name, icons, and splash
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APP="$ANDROID_PROJECT_DIR/app"
-          RES="$APP/src/main/res"
-
-          mkdir -p \
-            "$RES/values" \
-            "$RES/drawable" \
-            "$RES/mipmap-anydpi-v26" \
-            "$RES/mipmap-mdpi" \
-            "$RES/mipmap-hdpi" \
-            "$RES/mipmap-xhdpi" \
-            "$RES/mipmap-xxhdpi" \
-            "$RES/mipmap-xxxhdpi"
-
-          cat > "$RES/values/strings.xml" <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="app_name">Songbook for SongHub</string>
-          </resources>
-          EOF
-
-          cp assets/Songbook_splash.png \
-            "$RES/drawable/songbook_splash.png"
-
-          python3 - <<'PY'
-          from PIL import Image
-          from pathlib import Path
-          import os
-
-          res = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app/src/main/res"
-
-          with Image.open("assets/songbook_icon.jpg") as source:
-              image = source.convert("RGBA")
-              image.save(res / "drawable/songbook_icon_foreground.png")
-
-              sizes = {
-                  "mipmap-mdpi": 48,
-                  "mipmap-hdpi": 72,
-                  "mipmap-xhdpi": 96,
-                  "mipmap-xxhdpi": 144,
-                  "mipmap-xxxhdpi": 192,
-              }
-
-              for folder, size in sizes.items():
-                  image.resize(
-                      (size, size), Image.Resampling.LANCZOS
-                  ).save(res / folder / "ic_launcher.png")
-          PY
-
-          cat > "$RES/drawable/songbook_icon_background.xml" <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"
-              android:shape="rectangle">
-              <solid android:color="#FFFFFF"/>
-          </shape>
-          EOF
-
-          cat > "$RES/mipmap-anydpi-v26/ic_launcher.xml" <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@drawable/songbook_icon_background"/>
-              <foreground android:drawable="@drawable/songbook_icon_foreground"/>
-          </adaptive-icon>
-          EOF
-
-      - name: Configure splash screen dependency
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          app = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app"
-          gradle = next(
-              (p for p in [app / "build.gradle", app / "build.gradle.kts"]
-               if p.exists()), None
-          )
-
-          if gradle is None:
-              raise SystemExit("App Gradle file not found.")
-
-          text = gradle.read_text()
-
-          if "androidx.core:core-splashscreen" not in text:
-              match = re.search(r"dependencies\s*\{", text)
-
-              if not match:
-                  raise SystemExit("No dependencies block found.")
-
-              dependency = (
-                  '\n    implementation("androidx.core:core-splashscreen:1.0.1")\n'
-                  if gradle.name.endswith(".kts")
-                  else "\n    implementation 'androidx.core:core-splashscreen:1.0.1'\n"
-              )
-
-              text = text[:match.end()] + dependency + text[match.end():]
-              gradle.write_text(text)
-
-          print("Splash screen dependency configured.")
-          PY
-
-      - name: Configure Android theme
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          RES="$ANDROID_PROJECT_DIR/app/src/main/res"
-          mkdir -p "$RES/values"
-
-          cat > "$RES/values/themes.xml" <<'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="Theme.SongHub" parent="Theme.SplashScreen">
-                  <item name="windowSplashScreenBackground">#000000</item>
-                  <item name="windowSplashScreenAnimatedIcon">@drawable/songbook_splash</item>
-                  <item name="postSplashScreenTheme">@style/Theme.SongHub.Main</item>
-              </style>
-
-              <style name="Theme.SongHub.Main"
-                  parent="android:style/Theme.Material.Light.NoActionBar">
-                  <item name="android:fontFamily">sans</item>
-                  <item name="android:windowLightStatusBar">false</item>
-              </style>
-          </resources>
-          EOF
-
-      - name: Configure Android Manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          manifest = (
-              Path(os.environ["ANDROID_PROJECT_DIR"])
-              / "app/src/main/AndroidManifest.xml"
-          )
-
-          text = manifest.read_text()
-          match = re.search(r"<application\b[^>]*>", text, flags=re.S)
-
-          if not match:
-              raise SystemExit("Could not find application tag.")
-
-          tag = match.group(0)
-          attrs = {
-              "android:label": "@string/app_name",
-              "android:icon": "@mipmap/ic_launcher",
-              "android:roundIcon": "@mipmap/ic_launcher",
-              "android:theme": "@style/Theme.SongHub",
-          }
-
-          for name, value in attrs.items():
-              pattern = rf'\s+{re.escape(name)}="[^"]*"'
-              replacement = f'\n        {name}="{value}"'
-
-              if re.search(pattern, tag):
-                  tag = re.sub(pattern, replacement, tag, count=1)
-              else:
-                  tag = tag[:-1] + replacement + ">"
-
-          manifest.write_text(text[:match.start()] + tag + text[match.end():])
-          print("Android Manifest configured.")
-          PY
-
-      - name: Verify project search files
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Checking project source files..."
-
-          find "$ANDROID_PROJECT_DIR" -type f \
-            \( -name "*.html" -o -name "*.js" -o -name "*.css" \
-               -o -name "*.kt" -o -name "*.java" \) \
-            -not -path '*/build/*' \
-            -not -path '*/.gradle/*' \
-            -print | head -100
-
-          echo "Checking search-related code..."
-
-          grep -RniE \
-            "title|artist|song.?number|alphabet|A-Z|A–Z|letter" \
-            "$ANDROID_PROJECT_DIR" \
-            --exclude-dir=.gradle \
-            --exclude-dir=build \
-            | head -100 || true
+          echo "SongHub web assets verified."
 
       - name: Build debug APK
         shell: bash
@@ -300,11 +105,20 @@ jobs:
             assembleDebug \
             --no-daemon
 
-      - name: Upload APK
+          APK="$ANDROID_PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK was not generated."
+            exit 1
+          fi
+
+          echo "APK build completed."
+
+      - name: Upload SongHub APK
         uses: actions/upload-artifact@v4
         with:
-          name: Songbook-for-SongHub-APK
-          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          name: SongHub-EHDZ-Android-APK
+          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
           
