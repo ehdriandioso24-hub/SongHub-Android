@@ -24,6 +24,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set Songbook version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "SONGBOOK_VERSION_NAME=1.0.0" >> "$GITHUB_ENV"
+          echo "SONGBOOK_VERSION_CODE=1" >> "$GITHUB_ENV"
+
+          echo "Version name: 1.0.0"
+          echo "Version code: 1"
+
       - name: Find project ZIP
         shell: bash
         run: |
@@ -68,6 +79,72 @@ jobs:
           echo "Android project verified."
           echo "Project directory: $PROJECT_DIR"
 
+      - name: Set Android version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BUILD_GRADLE="$ANDROID_PROJECT_DIR/app/build.gradle"
+
+          if [ ! -f "$BUILD_GRADLE" ]; then
+            echo "::error::app/build.gradle not found."
+            exit 1
+          fi
+
+          python3 - "$BUILD_GRADLE" <<'PY'
+          import re
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          version_name = "1.0.0"
+          version_code = "1"
+
+          # Update existing versionCode
+          if re.search(r'\bversionCode\s+\d+', text):
+              text = re.sub(
+                  r'\bversionCode\s+\d+',
+                  f'versionCode {version_code}',
+                  text,
+                  count=1
+              )
+          else:
+              text = re.sub(
+                  r'(defaultConfig\s*\{)',
+                  rf'\1\n        versionCode {version_code}',
+                  text,
+                  count=1
+              )
+
+          # Update existing versionName
+          if re.search(r'\bversionName\s+["\'][^"\']*["\']', text):
+              text = re.sub(
+                  r'\bversionName\s+["\'][^"\']*["\']',
+                  f'versionName "{version_name}"',
+                  text,
+                  count=1
+              )
+          else:
+              text = re.sub(
+                  r'(defaultConfig\s*\{)',
+                  rf'\1\n        versionName "{version_name}"',
+                  text,
+                  count=1
+              )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          print("Android version configured:")
+          print("versionName = 1.0.0")
+          print("versionCode = 1")
+          PY
+
+          echo "Version configuration complete."
+
       - name: Change Android app name
         shell: bash
         run: |
@@ -91,19 +168,16 @@ jobs:
           import sys
 
           manifest = sys.argv[1]
-          new_name = "Songbook for SongHub"
 
           with open(manifest, "r", encoding="utf-8") as f:
               text = f.read()
 
-          # Change every existing android:label
           text = re.sub(
               r'android:label\s*=\s*("[^"]*"|\'[^\']*\')',
               'android:label="Songbook for SongHub"',
               text
           )
 
-          # If there was no android:label, add one to <application>
           if 'android:label=' not in text:
               text = re.sub(
                   r'<application\b',
@@ -155,6 +229,8 @@ jobs:
           set -euo pipefail
 
           echo "Building RELEASE APK..."
+          echo "Version: $SONGBOOK_VERSION_NAME"
+          echo "Version code: $SONGBOOK_VERSION_CODE"
 
           gradle \
             -p "$ANDROID_PROJECT_DIR" \
@@ -233,7 +309,7 @@ jobs:
           RELEASE_DIR="$ANDROID_PROJECT_DIR/app/build/outputs/apk/release"
 
           ALIGNED_APK="$RELEASE_DIR/songbook-aligned.apk"
-          FINAL_APK="$RELEASE_DIR/Songbook-for-SongHub-release.apk"
+          FINAL_APK="$RELEASE_DIR/Songbook-for-SongHub-v1.0.0.apk"
 
           echo "Using Build Tools:"
           echo "$BUILD_TOOLS_DIR"
@@ -272,7 +348,7 @@ jobs:
       - name: Upload Songbook Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: Songbook-for-SongHub-Release-APK
+          name: Songbook-for-SongHub-v1.0.0
           path: ${{ env.FINAL_APK }}
           if-no-files-found: error
           retention-days: 14
